@@ -336,32 +336,55 @@ def build_news_features_mind(config):
     news_features = {}
 
     news_feature_dict = {}
+
+    entities_sample = []
+    print('Start build news features')
     fp_train_news = open(config['data']['train_news'], 'r', encoding='utf-8')
     for line in fp_train_news:
-        newsid, vert, subvert, title, abstract, url, entity_info_title, entity_info_abstract = line.strip().split('\t')
-        news_feature_dict[newsid] = (title+" "+abstract, entity_info_title, entity_info_abstract)
+        if len(news_feature_dict.keys()) < 4000:
+            newsid, vert, subvert, title, abstract, url, entity_info_title, entity_info_abstract = line.strip().split('\t')
+            news_feature_dict[newsid] = (title+" "+abstract, entity_info_title, entity_info_abstract)
+        else:
+            break   
+
     # entityid, entity_freq, entity_position, entity_type
     fp_dev_news = open(config['data']['valid_news'], 'r', encoding='utf-8')
     for line in fp_dev_news:
-        newsid, vert, subvert, title, abstract, url, entity_info_title, entity_info_abstract = line.strip().split('\t')
-        news_feature_dict[newsid] = (title + " " + abstract, entity_info_title, entity_info_abstract)
+        if len(news_feature_dict.keys()) < 1000:
+            newsid, vert, subvert, title, abstract, url, entity_info_title, entity_info_abstract = line.strip().split('\t')
+            news_feature_dict[newsid] = (title + " " + abstract, entity_info_title, entity_info_abstract)
+        else:
+            break 
+            #for d in entity_info_title:
+             #   entity_id = entity2id_dict[d['WikidataId']]
+              #  if entity_id not in entities_sample:
+               #     entities_sample.append(entity_id)
+            #for d in entity_info_abstract:
+             #   entity_id = entity2id_dict[d['WikidataId']]
+              #  if entity_id not in entities_sample:
+               #     entities_sample.append(entity_id)
+
 
     #deal with doc feature
     entity_type_dict = {}
     entity_type_index = 1
     model = SentenceTransformer('distilbert-base-nli-stsb-mean-tokens')
     for news in news_feature_dict:
-        sentence_embedding = model.encode(news_feature_dict[news][0])
+        sentence_embedding = model.encode(news_feature_dict[news][0], show_progress_bar=False)
         news_entity_feature_list = []
         title_entity_json = json.loads(news_feature_dict[news][1])
         abstract_entity_json = json.loads(news_feature_dict[news][2])
         news_entity_feature = {}
         for item in title_entity_json:
+            if item['WikidataId'] not in entities_sample:
+                entities_sample.append('WikidataId')
             if item['Type'] not in entity_type_dict:
                 entity_type_dict[item['Type']] = entity_type_index
                 entity_type_index = entity_type_index + 1
             news_entity_feature[item['WikidataId']] = (len(item['OccurrenceOffsets']), 1, entity_type_dict[item['Type']]) #entity_freq, entity_position, entity_type
         for item in abstract_entity_json:
+            if item['WikidataId'] not in entities_sample:
+                entities_sample.append('WikidataId')
             if item['WikidataId'] in news_entity_feature:
                 news_entity_feature[item['WikidataId']] = (news_entity_feature[item['WikidataId']][0] + len(item['OccurrenceOffsets']), 1, entity_type_dict[item['Type']])
             else:
@@ -377,22 +400,22 @@ def build_news_features_mind(config):
         if len(news_entity_feature_list) > config['model']['news_entity_num']:
             news_entity_feature_list = news_entity_feature_list[:config['model']['news_entity_num']]
         else:
-            for i in (i for i in range(len(news_entity_feature_list), config['model']['news_entity_num'])):
+            for i in range(len(news_entity_feature_list), config['model']['news_entity_num']):
                 news_entity_feature_list.append([0, 0, 0, 0])
         news_feature_list_ins = [[],[],[],[],[]]
-        for i in (i for i in range(len(news_entity_feature_list))): 
+        for i in range(len(news_entity_feature_list)):
             for j in range(4):
                 news_feature_list_ins[j].append(news_entity_feature_list[i][j])
         news_feature_list_ins[4] = sentence_embedding
         news_features[news] = news_feature_list_ins
     news_features["N0"] = [[],[],[],[],[]]
-    for i in (i for i in range(config['model']['news_entity_num'])):
+    for i in range(config['model']['news_entity_num']):
         for j in range(4):
             news_features["N0"][j].append(0)
     news_features["N0"][4] = np.zeros(config['model']['document_embedding_dim'])
-    return news_features, 100, 10, 100
+    return news_features, 100, 10, 100, entities_sample
 
-def construct_adj_mind(config):#graph is triple
+def construct_adj_mind(config, entities_sample):#graph is triple
     print('constructing adjacency matrix ...')
     graph_file_fp = open(config['data']['knowledge_graph'], 'r', encoding='utf-8')
     kg = {}
@@ -401,32 +424,30 @@ def construct_adj_mind(config):#graph is triple
         head = int(linesplit[0])+1
         relation = int(linesplit[2])+1
         tail = int(linesplit[1])+1
-        if head not in kg:
-            kg[head] = []
-        kg[head].append((tail, relation))
-        if tail not in kg:
-            kg[tail] = []
-        kg[tail].append((head, relation))
-        del linesplit, head, relation, tail 
+        if head in entities_sample and tail in entities_sample:
+            if head not in kg:
+                kg[head] = []
+            kg[head].append((tail, relation))
+            if tail not in kg:
+                kg[tail] = []
+            kg[tail].append((head, relation))
 
-    fp_entity2id = open(config['data']['entity_index'], 'r', encoding='utf-8')
-    entity_num = int(fp_entity2id.readline().split('\n')[0])+1
-    print(entity_num)
+    #fp_entity2id = open(config['data']['entity_index'], 'r', encoding='utf-8')
+    #entity_num = int(fp_entity2id.readline().split('\n')[0])+1
+    entity_num = len(entities_sample)
     entity_adj = []
     relation_adj = []
-    for i in (i for i in range(entity_num+1)):
+    for i in range(entity_num+1):
         entity_adj.append([])
         relation_adj.append([])
-    for i in (i for i in range(config['model']['entity_neighbor_num'])):
+    for i in range(config['model']['entity_neighbor_num']):
         entity_adj[0].append(0)
         relation_adj[0].append(0)
     for key in kg.keys():
-        for index in (i for i in range(config['model']['entity_neighbor_num'])):
+        for index in range(config['model']['entity_neighbor_num']):
             i = random.randint(0,len(kg[key])-1)
             entity_adj[int(key)].append(int(kg[key][i][0]))
             relation_adj[int(key)].append(int(kg[key][i][1]))
-
-    del kg
 
     return entity_adj, relation_adj
 
@@ -610,14 +631,10 @@ def build_item2item_data(config):
 
 def load_data_mind(config):
 
-    entity_adj, relation_adj = construct_adj_mind(config)
+    news_feature, max_entity_freq, max_entity_pos, max_entity_type, entities_sample = build_news_features_mind(config)
 
-    print('Primo Step')
-
-    news_feature, max_entity_freq, max_entity_pos, max_entity_type = build_news_features_mind(config)
-
-    print('Secondo Step')
-
+    entity_adj, relation_adj = construct_adj_mind(config, entities_sample)
+   
     user_history = build_user_history(config)
 
     entity_embedding, relation_embedding = construct_embedding_mind(config)
